@@ -1,0 +1,4 @@
+subject,concept,misconception_text,correction
+Physics,Newton's First Law,Objects in motion must have a force pushing them forward,Objects in motion stay in motion unless acted upon by an external force.
+Physics,Newton's Second Law,Heavier objects fall faster because of greater force,Acceleration depends on net force and mass via F=ma.
+Physics,Newton's Third Law,Action and reaction forces cancel each other out,Action-reaction forces act on different bodies so motion can still occur.

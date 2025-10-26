@@ -1,0 +1,5 @@
+- [x] Refine generation_service prompt & validation
+- [x] Enhance question_routes with context/misconceptions/traits and Mongo storage
+- [x] Update models/tests for new request shape
+- [ ] Build chat-style adaptive tutor interface
+- [ ] Smoke test API + frontend after UI swap
