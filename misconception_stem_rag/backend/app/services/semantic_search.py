@@ -12,9 +12,10 @@ from typing import Any
 import chromadb
 from sentence_transformers import SentenceTransformer
 
-from ..config import settings
+from ..config import get_settings
 
 logger = logging.getLogger(__name__)
+settings = get_settings()
 
 # Initialize sentence-transformer model
 # Using all-MiniLM-L6-v2: Fast, lightweight, good for semantic search

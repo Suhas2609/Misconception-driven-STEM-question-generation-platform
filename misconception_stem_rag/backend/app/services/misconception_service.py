@@ -18,11 +18,12 @@ from typing import Any
 
 from openai import OpenAI
 
-from ..config import settings
+from ..config import get_settings
 from ..db.mongo import get_collection
 from ..services.semantic_search import get_semantic_search_service
 
 logger = logging.getLogger(__name__)
+settings = get_settings()
 
 
 class MisconceptionService:
@@ -32,9 +33,24 @@ class MisconceptionService:
         """Initialize misconception service with OpenAI and semantic search."""
         self.client = OpenAI(api_key=settings.openai_api_key)
         self.semantic_service = get_semantic_search_service()
-        self.misconceptions_collection = get_collection("misconceptions")
-        self.ai_misconceptions_collection = get_collection("ai_generated_misconceptions")
+        # Collections will be lazy-loaded in async methods
+        self._misconceptions_collection = None
+        self._ai_misconceptions_collection = None
         logger.info("✅ Misconception service initialized")
+    
+    @property
+    def misconceptions_collection(self):
+        """Lazy-load misconceptions collection."""
+        if self._misconceptions_collection is None:
+            self._misconceptions_collection = get_collection("misconceptions")
+        return self._misconceptions_collection
+    
+    @property
+    def ai_misconceptions_collection(self):
+        """Lazy-load AI-generated misconceptions collection."""
+        if self._ai_misconceptions_collection is None:
+            self._ai_misconceptions_collection = get_collection("ai_generated_misconceptions")
+        return self._ai_misconceptions_collection
     
     async def seed_from_csv(self, csv_path: str | Path) -> int:
         """
