@@ -16,8 +16,9 @@ from ..models.user import UserModel
 from ..routes.auth import get_current_user
 from ..services import pdf as pdf_service
 from ..services.topic_extraction import extract_topics_from_text
-from ..services.topic_question_generation import generate_questions_for_topics
+from ..services.topic_question_generation import generate_questions_for_topics, generate_questions_for_topics_with_semantic_context
 from ..services.explanation_generation import generate_personalized_explanation
+from ..services.semantic_search import get_semantic_search_service
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -180,11 +181,11 @@ async def upload_pdf_with_topic_extraction(
             detail=f"Failed to save uploaded file: {str(e)}"
         )
     
-    # Extract text from PDF
+    # Extract text from PDF WITH metadata for semantic search
     try:
-        logger.info(f"📄 Extracting text from PDF...")
-        chunks = pdf_service.process_pdf(str(file_path))
-        logger.info(f"✅ Extracted {len(chunks)} text chunks")
+        logger.info(f"📄 Extracting text from PDF with metadata...")
+        chunks, metadata_list = pdf_service.process_pdf_with_metadata(str(file_path))
+        logger.info(f"✅ Extracted {len(chunks)} text chunks with page metadata")
     except Exception as e:
         logger.error(f"❌ PDF processing failed: {e}")
         raise HTTPException(
@@ -242,6 +243,20 @@ async def upload_pdf_with_topic_extraction(
             detail="Failed to create learning session"
         )
     
+    # **NEW: Embed PDF chunks in ChromaDB for semantic search**
+    try:
+        logger.info(f"🔮 Embedding PDF chunks in ChromaDB for session {session_id}...")
+        semantic_service = get_semantic_search_service()
+        num_stored = semantic_service.store_pdf_chunks(
+            session_id=session_id,
+            chunks=chunks,
+            metadata_list=metadata_list
+        )
+        logger.info(f"✅ Stored {num_stored} chunks in ChromaDB vector store")
+    except Exception as e:
+        # Don't fail the upload if embedding fails - log and continue
+        logger.error(f"⚠️ ChromaDB embedding failed (non-critical): {e}")
+    
     return {
         "session_id": session_id,
         "filename": file.filename,
@@ -249,7 +264,7 @@ async def upload_pdf_with_topic_extraction(
         "topics": [t.model_dump() for t in topic_result.topics] if topic_result else [],
         "document_summary": topic_result.document_summary if topic_result else None,
         "recommended_order": topic_result.recommended_order if topic_result else [],
-        "message": f"Successfully extracted {len(topic_result.topics) if topic_result else 0} topics"
+        "message": f"Successfully extracted {len(topic_result.topics) if topic_result else 0} topics and embedded {len(chunks)} chunks"
     }
 
 
@@ -405,7 +420,7 @@ async def generate_questions_from_topics(
                 detail="No valid topics found for generation"
             )
         
-        # 4. Get PDF content for RAG
+        # 4. Get PDF content using SEMANTIC SEARCH (True RAG!)
         pdf_path = session.get("file_path")  # Fixed: was "pdf_path", should be "file_path"
         logger.info(f"📁 PDF path from session: {pdf_path}")
         
@@ -422,16 +437,47 @@ async def generate_questions_from_topics(
                 detail=f"PDF file not found at path: {pdf_path}"
             )
         
-        # Extract text from PDF
-        chunks = pdf_service.process_pdf(pdf_path)
-        pdf_content = " ".join(chunks[:10])  # Use first 10 chunks for context
+        # **NEW: Use semantic search to retrieve relevant content per topic**
+        semantic_service = get_semantic_search_service()
+        pdf_content_by_topic = {}
         
-        logger.info(f"📄 Using {len(chunks)} PDF chunks for context")
+        for topic in selected_topic_objects:
+            topic_title = topic.get("title", "")
+            topic_description = topic.get("description", "")
+            
+            # Create search query combining title and description
+            search_query = f"{topic_title}. {topic_description}"
+            
+            logger.info(f"🔍 Semantic search for topic: '{topic_title}'")
+            
+            # Retrieve top 5 most relevant chunks for this topic
+            results = semantic_service.semantic_search(
+                session_id=session_id,
+                query=search_query,
+                n_results=5
+            )
+            
+            if results["documents"]:
+                # Combine retrieved chunks with metadata
+                relevant_content = "\n\n".join([
+                    f"[Page {meta.get('page', '?')}] {doc}"
+                    for doc, meta in zip(results["documents"], results["metadatas"])
+                ])
+                pdf_content_by_topic[topic_title] = relevant_content
+                logger.info(f"✅ Retrieved {len(results['documents'])} relevant chunks for '{topic_title}'")
+            else:
+                # Fallback: use basic chunking if semantic search fails
+                logger.warning(f"⚠️ No semantic results for '{topic_title}', using fallback")
+                chunks = pdf_service.process_pdf(pdf_path)
+                pdf_content_by_topic[topic_title] = " ".join(chunks[:5])
+        
+        logger.info(f"📄 Retrieved content for {len(pdf_content_by_topic)} topics using semantic search")
         
         # 5. **CORE PROMPT ENGINEERING** - Generate questions with GPT-4o
-        questions = generate_questions_for_topics(
+        # Pass the semantic search results to question generation
+        questions = generate_questions_for_topics_with_semantic_context(
             topics=selected_topic_objects,
-            pdf_content=pdf_content,
+            pdf_content_by_topic=pdf_content_by_topic,
             cognitive_traits=cognitive_traits,
             num_questions_per_topic=payload.num_questions_per_topic
         )

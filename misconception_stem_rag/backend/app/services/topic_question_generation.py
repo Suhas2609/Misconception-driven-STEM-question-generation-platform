@@ -227,3 +227,117 @@ def generate_questions_for_topics(
     
     logger.info(f"🎉 Total questions generated: {len(all_questions)}")
     return all_questions
+
+
+def generate_questions_for_topics_with_semantic_context(
+    topics: list[dict[str, Any]],
+    pdf_content_by_topic: dict[str, str],
+    cognitive_traits: dict[str, float],
+    num_questions_per_topic: int = 2
+) -> list[dict[str, Any]]:
+    """
+    Generate personalized questions using semantic search results.
+    
+    This function uses topic-specific content retrieved via semantic search,
+    enabling true RAG (Retrieval-Augmented Generation).
+    
+    Args:
+        topics: List of topic dicts with title, description, difficulty
+        pdf_content_by_topic: Dict mapping topic title to relevant PDF content
+        cognitive_traits: User's cognitive profile scores
+        num_questions_per_topic: How many questions to generate per topic
+    
+    Returns:
+        List of generated question objects
+    """
+    client = _get_client()
+    if not client:
+        logger.error("OpenAI client not available - cannot generate questions")
+        return []
+    
+    all_questions = []
+    
+    for topic in topics:
+        topic_title = topic.get("title", "Unknown Topic")
+        topic_description = topic.get("description", "")
+        difficulty = topic.get("difficulty", "intermediate").lower()
+        
+        # Get semantically retrieved content for this specific topic
+        topic_content = pdf_content_by_topic.get(topic_title, "")
+        
+        if not topic_content:
+            logger.warning(f"⚠️ No semantic content found for topic: {topic_title}, skipping...")
+            continue
+        
+        logger.info(f"🎯 Generating {num_questions_per_topic} questions for topic: {topic_title}")
+        logger.info(f"📄 Using {len(topic_content)} chars of semantically retrieved content")
+        
+        for i in range(num_questions_per_topic):
+            try:
+                prompt = build_question_generation_prompt(
+                    topic_title=topic_title,
+                    topic_description=topic_description,
+                    pdf_content=topic_content,  # ← Semantically retrieved content!
+                    cognitive_traits=cognitive_traits,
+                    difficulty=difficulty
+                )
+                
+                response = client.chat.completions.create(
+                    model=_settings.openai_model or "gpt-4o",
+                    messages=[
+                        {
+                            "role": "system",
+                            "content": "You are an expert STEM assessment designer. Return ONLY valid JSON with no markdown or explanations."
+                        },
+                        {
+                            "role": "user",
+                            "content": prompt
+                        }
+                    ],
+                    temperature=0.4,  # Balanced creativity and consistency
+                    max_tokens=1000
+                )
+                
+                content = response.choices[0].message.content
+                if not content:
+                    logger.warning(f"Empty response for topic {topic_title}")
+                    continue
+                
+                # Strip markdown fences if present
+                content = content.strip()
+                if content.startswith("```json"):
+                    content = content[7:]
+                if content.startswith("```"):
+                    content = content[3:]
+                if content.endswith("```"):
+                    content = content[:-3]
+                content = content.strip()
+                
+                # Parse JSON
+                question_data = json.loads(content)
+                
+                # Validate structure
+                required_fields = ["stem", "options", "explanation", "difficulty"]
+                if not all(field in question_data for field in required_fields):
+                    logger.warning(f"Missing required fields in question for {topic_title}")
+                    continue
+                
+                if len(question_data.get("options", [])) != 4:
+                    logger.warning(f"Question must have exactly 4 options for {topic_title}")
+                    continue
+                
+                # Add metadata
+                question_data["topic"] = topic_title
+                question_data["question_number"] = len(all_questions) + 1
+                
+                all_questions.append(question_data)
+                logger.info(f"✅ Generated question {i+1}/{num_questions_per_topic} for {topic_title} using RAG")
+                
+            except json.JSONDecodeError as e:
+                logger.error(f"Failed to parse JSON for {topic_title}: {e}")
+                logger.error(f"Content was: {content[:200] if 'content' in locals() else 'N/A'}")
+            except Exception as e:
+                logger.error(f"Error generating question for {topic_title}: {e}", exc_info=True)
+    
+    logger.info(f"🎉 Total questions generated with semantic RAG: {len(all_questions)}")
+    return all_questions
