@@ -41,6 +41,10 @@ def _sessions_collection():
     return get_collection("sessions")
 
 
+def _users_collection():
+    return get_collection("users")
+
+
 @router.get("/sessions")
 async def get_user_sessions(
     current_user: UserModel = Depends(get_current_user),
@@ -525,6 +529,7 @@ async def submit_quiz_with_feedback(
     payload: QuizSubmission,
     current_user: UserModel = Depends(get_current_user),
     sessions_collection=Depends(_sessions_collection),
+    users_collection=Depends(_users_collection),
 ):
     """
     Submit quiz responses and get personalized feedback using GPT-4o.
@@ -659,11 +664,12 @@ async def submit_quiz_with_feedback(
         )
         
         # 7. Update user's cognitive traits
-        users_collection = get_collection("users")
+        logger.info(f"📊 Updating cognitive traits: {trait_adjustments}")
         await users_collection.update_one(
             {"_id": current_user.id},
             {"$set": {"cognitive_traits": trait_adjustments}}
         )
+        logger.info(f"✅ Cognitive traits updated successfully")
         
         logger.info(f"✅ Quiz graded: {correct_count}/{total_questions} correct ({score_percentage:.1f}%)")
         
