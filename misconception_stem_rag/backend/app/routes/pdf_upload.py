@@ -19,6 +19,7 @@ from ..services.topic_extraction import extract_topics_from_text
 from ..services.topic_question_generation import generate_questions_for_topics, generate_questions_for_topics_with_semantic_context
 from ..services.explanation_generation import generate_personalized_explanation
 from ..services.semantic_search import get_semantic_search_service
+from ..services.cognitive_trait_update import CognitiveTraitUpdateService
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -628,23 +629,38 @@ async def submit_quiz_with_feedback(
         score_percentage = (correct_count / total_questions * 100) if total_questions > 0 else 0
         avg_confidence = (total_confidence / total_questions) if total_questions > 0 else 0
         
-        # 5. Update cognitive traits based on performance
-        # Simple trait adjustment - can be enhanced with more sophisticated analysis
-        trait_adjustments = {}
+        # 5. Update cognitive traits using research-grade CDM-BKT-NLP hybrid system
+        logger.info(f"🧠 Applying research-grade trait update (CDM + BKT + NLP)")
         
-        if score_percentage >= 80:
-            # Strong performance - boost traits slightly
-            for trait, value in cognitive_traits.items():
-                current_val = float(value) if isinstance(value, (int, float)) else 0.5
-                trait_adjustments[trait] = min(1.0, current_val + 0.02)
-        elif score_percentage < 50:
-            # Needs support - slight decrease to trigger easier questions next time
-            for trait, value in cognitive_traits.items():
-                current_val = float(value) if isinstance(value, (int, float)) else 0.5
-                trait_adjustments[trait] = max(0.0, current_val - 0.02)
-        else:
-            # Maintain current traits
-            trait_adjustments = cognitive_traits
+        # Initialize cognitive trait update service
+        trait_service = CognitiveTraitUpdateService()
+        
+        # Convert responses to the format expected by the service
+        quiz_data = []
+        for resp in feedback_results:
+            quiz_data.append({
+                "question_number": resp["question_number"],
+                "selected_answer": resp["selected_answer"],
+                "is_correct": resp["is_correct"],
+                "confidence": resp["confidence"],
+                "reasoning": next(
+                    (r.get("reasoning") for r in payload.responses 
+                     if r.get("question_number") == resp["question_number"]), 
+                    None
+                ),
+                "question": next(
+                    (q for q in generated_questions 
+                     if q.get("question_number") == resp["question_number"]),
+                    None
+                )
+            })
+        
+        # Apply Bayesian trait updates with Q-matrix analysis
+        trait_adjustments = await trait_service.update_traits_from_quiz(
+            current_traits=cognitive_traits,
+            quiz_responses=quiz_data,
+            session_id=session_id
+        )
         
         # 6. Save quiz results to session
         await sessions_collection.update_one(
