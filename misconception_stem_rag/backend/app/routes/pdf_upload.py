@@ -106,7 +106,7 @@ async def get_session_detail(
     try:
         logger.info(f"🔍 Fetching session detail: {session_id}")
         
-        session = sessions_collection.find_one({"id": session_id})
+        session = await sessions_collection.find_one({"id": session_id})
         if not session:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
