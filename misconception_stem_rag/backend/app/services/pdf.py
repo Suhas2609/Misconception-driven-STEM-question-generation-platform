@@ -75,3 +75,62 @@ def process_pdf(file_path: str) -> list[str]:
 
     full_text = " ".join(fragment.strip() for fragment in pages if fragment)
     return _chunk_text(full_text)
+
+
+def process_pdf_with_metadata(file_path: str) -> tuple[list[str], list[dict[str, Any]]]:
+    """
+    Load a PDF and return token-aware chunks WITH metadata for semantic search.
+    
+    Returns:
+        Tuple of (chunks, metadata_list)
+        - chunks: List of text chunks
+        - metadata_list: List of metadata dicts with page, chunk_index, total_chunks
+    """
+    path = Path(file_path)
+    if not path.is_file():
+        raise FileNotFoundError(f"PDF not found at {path}")
+
+    document = _load_pdf(path)
+    
+    # Extract pages with page numbers
+    page_texts = []
+    try:
+        for page_num, page in enumerate(document, start=1):
+            page_texts.append({
+                "text": page.get_text("text"),
+                "page": page_num
+            })
+    except AttributeError:  # pragma: no cover - for pymupdf4llm responses
+        for page_num, page in enumerate(document, start=1):
+            page_texts.append({
+                "text": page.page_content,
+                "page": page_num
+            })
+    
+    # Create chunks with page tracking
+    chunks = []
+    metadata_list = []
+    chunk_index = 0
+    
+    for page_info in page_texts:
+        page_text = page_info["text"].strip()
+        if not page_text:
+            continue
+        
+        # Chunk the page text
+        page_chunks = _chunk_text(page_text)
+        
+        for chunk in page_chunks:
+            chunks.append(chunk)
+            metadata_list.append({
+                "page": page_info["page"],
+                "chunk_index": chunk_index,
+                "source": "pdf"
+            })
+            chunk_index += 1
+    
+    # Add total_chunks to all metadata
+    for metadata in metadata_list:
+        metadata["total_chunks"] = len(chunks)
+    
+    return chunks, metadata_list
