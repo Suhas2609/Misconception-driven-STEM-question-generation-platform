@@ -36,9 +36,9 @@ class SemanticSearchService:
     
     def __init__(self):
         """Initialize ChromaDB client and embedding model."""
-        self.client = chromadb.PersistentClient(path=str(settings.chroma_db_path))
+        self.client = chromadb.PersistentClient(path=str(settings.chromadb_path))
         self.embedding_model = get_embedding_model()
-        logger.info(f"📦 ChromaDB initialized at: {settings.chroma_db_path}")
+        logger.info(f"📦 ChromaDB initialized at: {settings.chromadb_path}")
     
     def create_or_get_collection(self, collection_name: str):
         """
