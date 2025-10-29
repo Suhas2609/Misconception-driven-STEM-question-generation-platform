@@ -170,10 +170,13 @@ export default function QuizPage() {
                             typeBadge = <span className="ml-2 rounded-full bg-emerald-500/20 px-2 py-0.5 text-[10px] font-semibold text-emerald-300 border border-emerald-500/30">Correct Answer</span>;
                           } else if (optionType === 'misconception') {
                             typeBadge = <span className="ml-2 rounded-full bg-rose-500/20 px-2 py-0.5 text-[10px] font-semibold text-rose-300 border border-rose-500/30">Common Misconception</span>;
-                          } else if (optionType === 'partial_misconception') {
-                            typeBadge = <span className="ml-2 rounded-full bg-amber-500/20 px-2 py-0.5 text-[10px] font-semibold text-amber-300 border border-amber-500/30">Partial Misconception</span>;
-                          } else if (optionType === 'plausible_distractor') {
-                            typeBadge = <span className="ml-2 rounded-full bg-blue-500/20 px-2 py-0.5 text-[10px] font-semibold text-blue-300 border border-blue-500/30">Plausible Distractor</span>;
+                          } else if (optionType === 'partial_misconception' || optionType === 'partial') {
+                            typeBadge = <span className="ml-2 rounded-full bg-amber-500/20 px-2 py-0.5 text-[10px] font-semibold text-amber-300 border border-amber-500/30">Partial Understanding</span>;
+                          } else if (optionType === 'plausible_distractor' || optionType === 'procedural') {
+                            typeBadge = <span className="ml-2 rounded-full bg-blue-500/20 px-2 py-0.5 text-[10px] font-semibold text-blue-300 border border-blue-500/30">Procedural Error</span>;
+                          } else if (optionType) {
+                            // Fallback for any other type (show it exists)
+                            typeBadge = <span className="ml-2 rounded-full bg-slate-500/20 px-2 py-0.5 text-[10px] font-semibold text-slate-300 border border-slate-500/30">{optionType}</span>;
                           }
 
                           return (
