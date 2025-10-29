@@ -233,7 +233,8 @@ def generate_questions_for_topics_with_semantic_context(
     topics: list[dict[str, Any]],
     pdf_content_by_topic: dict[str, str],
     cognitive_traits: dict[str, float],
-    num_questions_per_topic: int = 2
+    num_questions_per_topic: int = 2,
+    extra_questions: int = 0
 ) -> list[dict[str, Any]]:
     """
     Generate personalized questions using semantic search results.
@@ -245,7 +246,8 @@ def generate_questions_for_topics_with_semantic_context(
         topics: List of topic dicts with title, description, difficulty
         pdf_content_by_topic: Dict mapping topic title to relevant PDF content
         cognitive_traits: User's cognitive profile scores
-        num_questions_per_topic: How many questions to generate per topic
+        num_questions_per_topic: Base number of questions to generate per topic
+        extra_questions: Additional questions to distribute across first topics
     
     Returns:
         List of generated question objects
@@ -257,10 +259,15 @@ def generate_questions_for_topics_with_semantic_context(
     
     all_questions = []
     
-    for topic in topics:
+    for topic_idx, topic in enumerate(topics):
         topic_title = topic.get("title", "Unknown Topic")
         topic_description = topic.get("description", "")
         difficulty = topic.get("difficulty", "intermediate").lower()
+        
+        # Calculate questions for this topic (distribute extra questions to first topics)
+        questions_for_this_topic = num_questions_per_topic
+        if extra_questions > 0 and topic_idx < extra_questions:
+            questions_for_this_topic += 1
         
         # Get semantically retrieved content for this specific topic
         topic_content = pdf_content_by_topic.get(topic_title, "")
@@ -269,10 +276,10 @@ def generate_questions_for_topics_with_semantic_context(
             logger.warning(f"⚠️ No semantic content found for topic: {topic_title}, skipping...")
             continue
         
-        logger.info(f"🎯 Generating {num_questions_per_topic} questions for topic: {topic_title}")
+        logger.info(f"🎯 Generating {questions_for_this_topic} questions for topic: {topic_title}")
         logger.info(f"📄 Using {len(topic_content)} chars of semantically retrieved content")
         
-        for i in range(num_questions_per_topic):
+        for i in range(questions_for_this_topic):
             try:
                 prompt = build_question_generation_prompt(
                     topic_title=topic_title,

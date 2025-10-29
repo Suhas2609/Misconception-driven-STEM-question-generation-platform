@@ -479,12 +479,32 @@ async def generate_questions_from_topics(
         logger.info(f"📄 Retrieved content for {len(pdf_content_by_topic)} topics using semantic search")
         
         # 5. **CORE PROMPT ENGINEERING** - Generate questions with GPT-4o
+        # **MODIFIED**: Always generate 10 questions total, distributed across topics
+        total_questions_needed = 10
+        num_topics = len(selected_topic_objects)
+        
+        # Distribute questions across topics (minimum 1 per topic, rest distributed evenly)
+        if num_topics == 0:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="No topics selected"
+            )
+        
+        # Calculate questions per topic (ensure at least 1 per topic)
+        base_questions_per_topic = max(1, total_questions_needed // num_topics)
+        extra_questions = total_questions_needed - (base_questions_per_topic * num_topics)
+        
+        logger.info(f"📊 Generating {total_questions_needed} questions across {num_topics} topics")
+        logger.info(f"   Base: {base_questions_per_topic} per topic, Extra: {extra_questions}")
+        
+        # Generate questions with distributed count
         # Pass the semantic search results to question generation
         questions = generate_questions_for_topics_with_semantic_context(
             topics=selected_topic_objects,
             pdf_content_by_topic=pdf_content_by_topic,
             cognitive_traits=cognitive_traits,
-            num_questions_per_topic=payload.num_questions_per_topic
+            num_questions_per_topic=base_questions_per_topic,
+            extra_questions=extra_questions  # Distribute remaining questions
         )
         
         if not questions:
@@ -656,11 +676,12 @@ async def submit_quiz_with_feedback(
             })
         
         # Apply Bayesian trait updates with Q-matrix analysis
-        trait_adjustments = await trait_service.update_traits_from_quiz(
+        trait_update_result = trait_service.update_traits(
             current_traits=cognitive_traits,
             quiz_responses=quiz_data,
-            session_id=session_id
+            questions=generated_questions
         )
+        trait_adjustments = trait_update_result.get("updated_traits", cognitive_traits)
         
         # 6. Save quiz results to session
         await sessions_collection.update_one(

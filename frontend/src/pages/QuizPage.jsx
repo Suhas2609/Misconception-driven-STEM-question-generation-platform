@@ -162,6 +162,19 @@ export default function QuizPage() {
                           const optionKey = `${question._key}-option-${optionIdx}`;
                           const optionValue = option.text || option;
                           const optionLabel = option.text || option;
+                          const optionType = option.type || '';
+
+                          // Define badge colors based on option type
+                          let typeBadge = null;
+                          if (optionType === 'correct') {
+                            typeBadge = <span className="ml-2 rounded-full bg-emerald-500/20 px-2 py-0.5 text-[10px] font-semibold text-emerald-300 border border-emerald-500/30">Correct Answer</span>;
+                          } else if (optionType === 'misconception') {
+                            typeBadge = <span className="ml-2 rounded-full bg-rose-500/20 px-2 py-0.5 text-[10px] font-semibold text-rose-300 border border-rose-500/30">Common Misconception</span>;
+                          } else if (optionType === 'partial_misconception') {
+                            typeBadge = <span className="ml-2 rounded-full bg-amber-500/20 px-2 py-0.5 text-[10px] font-semibold text-amber-300 border border-amber-500/30">Partial Misconception</span>;
+                          } else if (optionType === 'plausible_distractor') {
+                            typeBadge = <span className="ml-2 rounded-full bg-blue-500/20 px-2 py-0.5 text-[10px] font-semibold text-blue-300 border border-blue-500/30">Plausible Distractor</span>;
+                          }
 
                           return (
                             <label
@@ -176,9 +189,9 @@ export default function QuizPage() {
                                 type="radio"
                                 value={optionValue}
                               />
-                              <span>
+                              <span className="flex-1">
                                 {optionLabel}
-                                {/* Hide answer type labels during quiz - will show after submission */}
+                                {typeBadge}
                               </span>
                             </label>
                           );
@@ -200,7 +213,7 @@ export default function QuizPage() {
                       </label>
 
                       <label className="flex flex-col gap-2 text-slate-300">
-                        <span>Reasoning (optional)</span>
+                        <span>Reasoning</span>
                         <textarea
                           className="rounded-lg border border-slate-800/70 bg-slate-950 px-3 py-2 text-slate-100 focus:border-emerald-400 focus:outline-none"
                           rows={3}
