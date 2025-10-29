@@ -279,8 +279,19 @@ def generate_questions_for_topics_with_semantic_context(
         logger.info(f"🎯 Generating {questions_for_this_topic} questions for topic: {topic_title}")
         logger.info(f"📄 Using {len(topic_content)} chars of semantically retrieved content")
         
+        # Track questions for this topic to avoid duplicates
+        topic_questions = []
+        
         for i in range(questions_for_this_topic):
             try:
+                # Build prompt with context of previous questions to avoid duplicates
+                previous_questions_context = ""
+                if topic_questions:
+                    previous_questions_context = "\n\n## IMPORTANT: AVOID DUPLICATES\nYou have already generated these questions for this topic:\n"
+                    for idx, prev_q in enumerate(topic_questions, 1):
+                        previous_questions_context += f"{idx}. {prev_q.get('stem', '')}\n"
+                    previous_questions_context += "\n**Generate a DIFFERENT question that tests a DIFFERENT aspect or sub-concept of this topic.**\n"
+                
                 prompt = build_question_generation_prompt(
                     topic_title=topic_title,
                     topic_description=topic_description,
@@ -289,19 +300,22 @@ def generate_questions_for_topics_with_semantic_context(
                     difficulty=difficulty
                 )
                 
+                # Append duplicate prevention context
+                prompt += previous_questions_context
+                
                 response = client.chat.completions.create(
                     model=_settings.openai_model or "gpt-4o",
                     messages=[
                         {
                             "role": "system",
-                            "content": "You are an expert STEM assessment designer. Return ONLY valid JSON with no markdown or explanations."
+                            "content": "You are an expert STEM assessment designer. Return ONLY valid JSON with no markdown or explanations. Generate diverse questions that test different aspects of the topic."
                         },
                         {
                             "role": "user",
                             "content": prompt
                         }
                     ],
-                    temperature=0.4,  # Balanced creativity and consistency
+                    temperature=0.7,  # Higher temperature for more diversity
                     max_tokens=1000
                 )
                 
@@ -337,8 +351,13 @@ def generate_questions_for_topics_with_semantic_context(
                 question_data["topic"] = topic_title
                 question_data["question_number"] = len(all_questions) + 1
                 
+                # Add to global list
                 all_questions.append(question_data)
-                logger.info(f"✅ Generated question {i+1}/{num_questions_per_topic} for {topic_title} using RAG")
+                
+                # Add to topic tracking list to prevent duplicates in next iteration
+                topic_questions.append(question_data)
+                
+                logger.info(f"✅ Generated question {i+1}/{questions_for_this_topic} for {topic_title} using RAG")
                 
             except json.JSONDecodeError as e:
                 logger.error(f"Failed to parse JSON for {topic_title}: {e}")
