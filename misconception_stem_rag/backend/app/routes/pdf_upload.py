@@ -651,6 +651,7 @@ async def submit_quiz_with_feedback(
         
         # 5. Update cognitive traits using research-grade CDM-BKT-NLP hybrid system
         logger.info(f"🧠 Applying research-grade trait update (CDM + BKT + NLP)")
+        logger.info(f"   Current traits: {cognitive_traits}")
         
         # Initialize cognitive trait update service
         trait_service = CognitiveTraitUpdateService()
@@ -675,13 +676,22 @@ async def submit_quiz_with_feedback(
                 )
             })
         
+        logger.info(f"   Prepared {len(quiz_data)} responses for trait analysis")
+        
         # Apply Bayesian trait updates with Q-matrix analysis
-        trait_update_result = trait_service.update_traits(
-            current_traits=cognitive_traits,
-            quiz_responses=quiz_data,
-            questions=generated_questions
-        )
-        trait_adjustments = trait_update_result.get("updated_traits", cognitive_traits)
+        try:
+            trait_update_result = trait_service.update_traits(
+                current_traits=cognitive_traits,
+                quiz_responses=quiz_data,
+                questions=generated_questions
+            )
+            trait_adjustments = trait_update_result.get("updated_traits", cognitive_traits)
+            logger.info(f"   ✅ Trait update successful!")
+            logger.info(f"   Updated traits: {trait_adjustments}")
+        except Exception as trait_error:
+            logger.error(f"   ❌ Trait update failed: {trait_error}", exc_info=True)
+            # Fallback to keeping current traits
+            trait_adjustments = cognitive_traits
         
         # 6. Save quiz results to session
         await sessions_collection.update_one(
