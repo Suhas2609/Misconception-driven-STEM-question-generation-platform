@@ -6,6 +6,32 @@ An intelligent educational platform that uses **GPT-4o AI**, **cognitive trait t
 
 ---
 
+## 🚀 **Quick Start**
+
+### For First-Time Users
+👉 **[5-Minute Quick Start Guide](./QUICKSTART.md)** - Get running fast with Docker!
+
+### For Detailed Setup
+📖 **[Complete Installation Guide](./INSTALLATION.md)** - Full setup instructions & troubleshooting
+
+### Prerequisites
+- Docker Desktop
+- Node.js 18+
+- OpenAI API Key
+
+```bash
+# Clone and run
+git clone https://github.com/Suhas2609/Misconception-driven-STEM-question-generation-platform.git
+cd Misconception-driven-STEM-question-generation-platform/misconception_stem_rag
+cp .env.example .env  # Add your OpenAI API key!
+docker-compose up -d
+cd ../frontend && npm install && npm run dev
+```
+
+**Access**: http://localhost:5173
+
+---
+
 ## ✅ **Latest Updates**
 
 ### 🎉 **Phase 5 Complete: Misconception Learning Cycle**
