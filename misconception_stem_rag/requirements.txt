@@ -19,6 +19,7 @@ aiofiles==23.2.1
 numpy<2.0.0,>=1.24.0
 nltk>=3.8
 spacy>=3.7.0
+textblob>=0.17.1
 langchain>=0.1.0
 faiss-cpu>=1.7.4
 networkx>=3.0

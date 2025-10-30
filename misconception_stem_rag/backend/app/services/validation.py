@@ -105,7 +105,35 @@ def _seed_misconceptions(force: bool = False) -> None:
     _misconceptions_seeded = True
 
 
-def get_related_misconceptions(topic: str, limit: int = 3) -> list[dict[str, Any]]:
+def get_related_misconceptions(
+    topic: str, 
+    limit: int = 3,
+    domain: str | None = None,
+    subject: str | None = None,
+    topic_relevance_threshold: float = 0.7
+) -> list[dict[str, Any]]:
+    """
+    Retrieve misconceptions related to a topic with domain and topic-level filtering.
+    
+    Args:
+        topic: Topic name or description to search for
+        limit: Maximum number of misconceptions to return
+        domain: Optional domain filter (e.g., "Physics", "Chemistry")
+        subject: Optional subject filter (alias for domain)
+        topic_relevance_threshold: Minimum similarity score (0-1) for topic relevance
+                                   Lower distance = higher similarity
+                                   Default 0.7 = strong topic alignment required
+        
+    Returns:
+        List of misconception dictionaries with metadata
+        
+    CRITICAL FILTERING (TWO-LEVEL):
+    1. DOMAIN-LEVEL: When domain/subject is provided, ONLY retrieves from that domain
+       (prevents Physics misconceptions in Chemistry questions)
+    2. TOPIC-LEVEL: Filters by semantic similarity to specific topic
+       (prevents "Organic Chemistry" misconceptions in "Chemical Bonding" questions)
+       (prevents "Thermodynamics" misconceptions in "Newton's Laws" questions)
+    """
     if not topic:
         return []
 
@@ -113,10 +141,26 @@ def get_related_misconceptions(topic: str, limit: int = 3) -> list[dict[str, Any
     if not _misconception_cache:
         return []
 
+    # Use subject as fallback for domain
+    filter_domain = domain or subject
+    
+    # Build where filter for domain-specific retrieval
+    where_filter = None
+    if filter_domain:
+        where_filter = {"subject": filter_domain}
+        import logging
+        logger = logging.getLogger(__name__)
+        logger.info(f"🔍 [DOMAIN FILTER] Retrieving {filter_domain} misconceptions only")
+
+    # TOPIC-LEVEL FILTERING: Retrieve MORE candidates initially (3x limit)
+    # so we have enough after topic relevance filtering
+    initial_limit = min(limit * 5, 15)  # Get 5x candidates but cap at 15
+    
     results = retrieval.retrieve_from_chroma(
         topic,
         collection_name=_MISCONCEPTION_COLLECTION,
-        limit=limit,
+        limit=initial_limit,
+        where=where_filter,
     )
 
     ids = results.get("ids", [[]])[0] if results.get("ids") else []
@@ -124,20 +168,71 @@ def get_related_misconceptions(topic: str, limit: int = 3) -> list[dict[str, Any
     metadatas = results.get("metadatas", [[]])[0] if results.get("metadatas") else []
     distances = results.get("distances", [[]])[0] if results.get("distances") else []
 
+    import logging
+    logger = logging.getLogger(__name__)
+
     related: list[dict[str, Any]] = []
+    filtered_count = 0
+    
     for idx, meta in enumerate(metadatas):
         if not meta:
             continue
+        
+        # LEVEL 1: DOMAIN VALIDATION - Reject cross-domain misconceptions
+        misconception_subject = meta.get("subject", "")
+        if filter_domain and misconception_subject != filter_domain:
+            logger.error(
+                f"🚨 DOMAIN VIOLATION: Expected {filter_domain}, "
+                f"got {misconception_subject} for misconception: "
+                f"{meta.get('misconception_text', '')[:60]}..."
+            )
+            continue  # Skip this misconception
+        
+        # LEVEL 2: TOPIC RELEVANCE - Filter by semantic similarity to topic
+        # ChromaDB returns distances where SMALLER = MORE SIMILAR
+        # Convert distance to similarity: similarity = 1 - (distance / 2)
+        # (assuming L2 distance normalized to [0, 2])
+        distance = distances[idx] if idx < len(distances) else 1.0
+        similarity = 1.0 - (min(distance, 2.0) / 2.0)  # Normalize to [0, 1]
+        
+        if similarity < topic_relevance_threshold:
+            filtered_count += 1
+            misconception_text = meta.get('misconception_text', '')[:60]
+            logger.debug(
+                f"🔍 [TOPIC FILTER] Excluded low-relevance misconception "
+                f"(similarity={similarity:.3f} < {topic_relevance_threshold}): "
+                f"{misconception_text}..."
+            )
+            continue  # Skip misconceptions with low topic relevance
+            
         entry = {
             "id": ids[idx] if idx < len(ids) else None,
-            "subject": meta.get("subject"),
+            "subject": misconception_subject,
             "concept": meta.get("concept"),
             "misconception_text": meta.get("misconception_text"),
             "correction": meta.get("correction"),
             "document": documents[idx] if idx < len(documents) else None,
-            "distance": distances[idx] if idx < len(distances) else None,
+            "distance": distance,
+            "similarity": similarity,  # Add similarity score for debugging
         }
         related.append(entry)
+        
+        # Stop once we have enough highly relevant misconceptions
+        if len(related) >= limit:
+            break
+    
+    if filter_domain:
+        logger.info(
+            f"✅ [TOPIC FILTER] Retrieved {len(related)}/{initial_limit} {filter_domain} "
+            f"misconceptions for topic '{topic}' "
+            f"(filtered {filtered_count} low-relevance, threshold={topic_relevance_threshold})"
+        )
+    else:
+        logger.info(
+            f"✅ [TOPIC FILTER] Retrieved {len(related)}/{initial_limit} misconceptions "
+            f"for topic '{topic}' (filtered {filtered_count} low-relevance)"
+        )
+    
     return related
 
 

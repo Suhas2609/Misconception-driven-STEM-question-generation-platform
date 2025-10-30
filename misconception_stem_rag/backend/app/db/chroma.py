@@ -20,7 +20,8 @@ def get_client() -> ClientAPI:
 
     global _client  # noqa: PLW0603 - module level singleton
     if _client is None:
-        _client = chromadb.PersistentClient(path=_settings.chromadb_path)
+        # Convert Path to string for ChromaDB compatibility
+        _client = chromadb.PersistentClient(path=str(_settings.chromadb_path))
     return _client
 
 

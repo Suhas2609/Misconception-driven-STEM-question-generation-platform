@@ -39,15 +39,34 @@ def retrieve_from_chroma(
     query: str,
     collection_name: str = _COLLECTION_NAME,
     limit: int = 3,
+    where: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Execute a similarity query with graceful degradation."""
+    """
+    Execute a similarity query with optional metadata filtering.
+    
+    Args:
+        query: Search query text
+        collection_name: ChromaDB collection name
+        limit: Maximum number of results
+        where: Optional metadata filter (e.g., {"subject": "Physics"})
+        
+    Returns:
+        Query results with ids, documents, metadatas, distances
+    """
 
     if not query:
         return {"ids": [[]], "documents": [[]], "metadatas": [[]], "distances": [[]]}
 
     collection = _get_collection(collection_name)
     try:
-        return collection.query(query_texts=[query], n_results=limit)
+        if where:
+            return collection.query(
+                query_texts=[query], 
+                n_results=limit,
+                where=where
+            )
+        else:
+            return collection.query(query_texts=[query], n_results=limit)
     except Exception:
         return {"ids": [[]], "documents": [[]], "metadatas": [[]], "distances": [[]]}
 

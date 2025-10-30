@@ -20,6 +20,13 @@ from ..services.topic_question_generation import generate_questions_for_topics, 
 from ..services.explanation_generation import generate_personalized_explanation
 from ..services.semantic_search import get_semantic_search_service
 from ..services.cognitive_trait_update import CognitiveTraitUpdateService
+from ..services.misconception_extraction import (
+    extract_misconception_from_response,
+    store_personal_misconception,
+    add_misconception_to_global_database,
+    check_and_promote_misconception_to_global,  # ✅ NEW: Proper promotion with frequency + novelty
+    get_user_personal_misconceptions
+)
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -380,6 +387,7 @@ async def generate_questions_from_topics(
     payload: GenerateQuestionsRequest,
     current_user: UserModel = Depends(get_current_user),
     sessions_collection=Depends(_sessions_collection),
+    users_collection=Depends(_users_collection),  # PHASE 5: For misconception retrieval
 ):
     """
     Generate personalized questions using GPT-4o based on:
@@ -400,8 +408,19 @@ async def generate_questions_from_topics(
                 detail="Session not found"
             )
         
-        # 2. Get user's cognitive traits
+        # 2. Get user's cognitive traits (prioritize topic-specific if available)
         cognitive_traits = current_user.cognitive_traits
+        
+        # Check if user has topic-specific traits for any selected topics
+        topic_traits_available = False
+        if hasattr(current_user, 'topic_traits') and current_user.topic_traits:
+            # Check if any selected topic has specific traits
+            for topic_title in payload.selected_topics:
+                if topic_title in current_user.topic_traits:
+                    topic_traits_available = True
+                    logger.info(f"📊 Found topic-specific traits for: {topic_title}")
+                    break
+        
         # Convert Pydantic model to dict if necessary
         if hasattr(cognitive_traits, 'model_dump'):
             cognitive_traits = cognitive_traits.model_dump()
@@ -410,7 +429,9 @@ async def generate_questions_from_topics(
         elif not isinstance(cognitive_traits, dict):
             cognitive_traits = {}
         
-        logger.info(f"📊 User cognitive profile: {cognitive_traits}")
+        logger.info(f"📊 User cognitive profile (global): {cognitive_traits}")
+        if topic_traits_available:
+            logger.info(f"✅ Topic-specific traits will be used for personalization")
         
         # 3. Filter selected topics
         all_topics = session.get("topics", [])
@@ -479,8 +500,8 @@ async def generate_questions_from_topics(
         logger.info(f"📄 Retrieved content for {len(pdf_content_by_topic)} topics using semantic search")
         
         # 5. **CORE PROMPT ENGINEERING** - Generate questions with GPT-4o
-        # **MODIFIED**: Always generate 10 questions total, distributed across topics
-        total_questions_needed = 10
+        # **MODIFIED**: Generate 3 questions total to save tokens during testing
+        total_questions_needed = 3
         num_topics = len(selected_topic_objects)
         
         # Distribute questions across topics (minimum 1 per topic, rest distributed evenly)
@@ -497,14 +518,33 @@ async def generate_questions_from_topics(
         logger.info(f"📊 Generating {total_questions_needed} questions across {num_topics} topics")
         logger.info(f"   Base: {base_questions_per_topic} per topic, Extra: {extra_questions}")
         
+        # Prepare topic-specific traits if available
+        user_topic_traits = None
+        if hasattr(current_user, 'topic_traits') and current_user.topic_traits:
+            user_topic_traits = {}
+            for topic_title in payload.selected_topics:
+                if topic_title in current_user.topic_traits:
+                    topic_profile = current_user.topic_traits[topic_title]
+                    # Convert to dict if needed
+                    if hasattr(topic_profile, 'model_dump'):
+                        user_topic_traits[topic_title] = topic_profile.model_dump()
+                    elif hasattr(topic_profile, 'dict'):
+                        user_topic_traits[topic_title] = topic_profile.dict()
+                    elif isinstance(topic_profile, dict):
+                        user_topic_traits[topic_title] = topic_profile
+            logger.info(f"📊 Using topic-specific traits for {len(user_topic_traits)} topics")
+        
         # Generate questions with distributed count
         # Pass the semantic search results to question generation
-        questions = generate_questions_for_topics_with_semantic_context(
+        questions = await generate_questions_for_topics_with_semantic_context(
             topics=selected_topic_objects,
             pdf_content_by_topic=pdf_content_by_topic,
             cognitive_traits=cognitive_traits,
             num_questions_per_topic=base_questions_per_topic,
-            extra_questions=extra_questions  # Distribute remaining questions
+            extra_questions=extra_questions,  # Distribute remaining questions
+            user_topic_traits=user_topic_traits,  # Pass topic-specific traits
+            user_id=current_user.id,  # PHASE 5: For personal misconception retrieval
+            db=users_collection.database  # PHASE 5: Pass database instance
         )
         
         if not questions:
@@ -679,11 +719,16 @@ async def submit_quiz_with_feedback(
         logger.info(f"   Prepared {len(quiz_data)} responses for trait analysis")
         
         # Apply Bayesian trait updates with Q-matrix analysis
+        # Pass selected topics for topic-level trait tracking
+        selected_topics = session.get("selected_topics", [])
+        topic_context = ", ".join(selected_topics) if selected_topics else None
+        
         try:
             trait_update_result = trait_service.update_traits(
                 current_traits=cognitive_traits,
                 quiz_responses=quiz_data,
-                questions=generated_questions
+                questions=generated_questions,
+                topic_name=topic_context  # Enable topic-specific tracking
             )
             trait_adjustments = trait_update_result.get("updated_traits", cognitive_traits)
             logger.info(f"   ✅ Trait update successful!")
@@ -693,7 +738,109 @@ async def submit_quiz_with_feedback(
             # Fallback to keeping current traits
             trait_adjustments = cognitive_traits
         
-        # 6. Save quiz results to session
+        # 6. **NEW: Extract and store misconceptions from wrong answers** 🧠
+        logger.info(f"🧠 [PHASE 5] Extracting misconceptions from responses...")
+        misconceptions_discovered = []
+        
+        for idx, resp in enumerate(feedback_results):
+            if not resp["is_correct"]:
+                # Get the original response data
+                original_response = next(
+                    (r for r in payload.responses if r.get("question_number") == resp["question_number"]),
+                    None
+                )
+                
+                if not original_response or not original_response.get("reasoning"):
+                    logger.debug(f"  Skipping Q{resp['question_number']} - no reasoning provided")
+                    continue
+                
+                # Get question details
+                question = next(
+                    (q for q in generated_questions if q.get("question_number") == resp["question_number"]),
+                    None
+                )
+                
+                if not question:
+                    continue
+                
+                # Determine topic for this question
+                question_topic = question.get("topic", selected_topics[0] if selected_topics else "General")
+                
+                # Extract all options for context
+                all_options = [opt.get("text") for opt in question.get("options", [])]
+                correct_option = next(
+                    (opt.get("text") for opt in question.get("options", []) if opt.get("type") == "correct"),
+                    None
+                )
+                
+                try:
+                    # Use GPT-4o to extract misconception
+                    discovered = await extract_misconception_from_response(
+                        question_text=question.get("stem"),
+                        correct_option=correct_option,
+                        selected_option=resp["selected_answer"],
+                        reasoning=original_response.get("reasoning"),
+                        topic=question_topic,
+                        all_options=all_options
+                    )
+                    
+                    if discovered and discovered.confidence >= 0.6:  # Only store high-confidence misconceptions
+                        # Store in user's personal misconception history
+                        personal_mc = await store_personal_misconception(
+                            db=users_collection.database,
+                            user_id=current_user.id,
+                            discovered=discovered,
+                            question_context=question.get("stem"),
+                            student_reasoning=original_response.get("reasoning")
+                        )
+                        
+                        # **NEW: Check if should be promoted to global KB with frequency + novelty checks**
+                        promotion_result = await check_and_promote_misconception_to_global(
+                            db=users_collection.database,
+                            misconception_text=discovered.misconception_text,
+                            topic=question_topic,
+                            domain=question.get("metadata", {}).get("domain", "General"),
+                            frequency_threshold=3,  # Require 3+ students
+                            similarity_threshold=0.85  # 85% similarity = duplicate
+                        )
+                        
+                        if promotion_result.get("promoted"):
+                            logger.info(
+                                f"  🎉 PROMOTED TO GLOBAL: '{discovered.misconception_text[:50]}...' "
+                                f"({promotion_result.get('student_count')} students, "
+                                f"novelty={promotion_result.get('novelty_score', 0):.2f})"
+                            )
+                        else:
+                            reason = promotion_result.get("reason", "unknown")
+                            if reason == "duplicate":
+                                logger.debug(
+                                    f"  ⏸️ Not promoted (duplicate, sim={promotion_result.get('similarity', 0):.2f})"
+                                )
+                            elif reason == "insufficient_frequency":
+                                logger.debug(
+                                    f"  ⏸️ Not promoted (only {promotion_result.get('student_count', 0)}/3 students)"
+                                )
+                        
+                        misconceptions_discovered.append({
+                            "misconception": discovered.misconception_text,
+                            "topic": question_topic,
+                            "severity": discovered.severity,
+                            "question_number": resp["question_number"],
+                            "promoted_to_global": promotion_result.get("promoted", False)
+                        })
+                        
+                        logger.info(f"  ✅ Q{resp['question_number']}: '{discovered.misconception_text}' (severity: {discovered.severity})")
+                    
+                except Exception as mc_error:
+                    logger.error(f"  ❌ Failed to extract misconception for Q{resp['question_number']}: {mc_error}")
+                    continue
+        
+        if misconceptions_discovered:
+            logger.info(f"🎯 [PHASE 5] Discovered {len(misconceptions_discovered)} new misconceptions")
+        else:
+            logger.info(f"✓ [PHASE 5] No new misconceptions identified")
+        
+        # 7. Save quiz results to session (include misconceptions)
         await sessions_collection.update_one(
             {"_id": session_id},
             {
@@ -704,17 +851,34 @@ async def submit_quiz_with_feedback(
                         "correct_count": correct_count,
                         "total_questions": total_questions,
                         "avg_confidence": avg_confidence,
-                        "responses": feedback_results
+                        "responses": feedback_results,
+                        "misconceptions_discovered": misconceptions_discovered  # NEW: Track discovered misconceptions
                     }
                 }
             }
         )
         
-        # 7. Update user's cognitive traits
+        # 8. Update user's cognitive traits (both global and topic-specific)
         logger.info(f"📊 Updating cognitive traits: {trait_adjustments}")
+        
+        update_data = {"$set": {"cognitive_traits": trait_adjustments}}
+        
+        # If we have topic context, also update topic-specific traits for EACH topic
+        if selected_topics:
+            for topic in selected_topics:
+                # Use individual topic names as keys
+                topic_key = f"topic_traits.{topic}"
+                update_data["$set"][topic_key] = {
+                    "topic_name": topic,
+                    "traits": trait_adjustments,
+                    "question_count": total_questions,
+                    "last_updated": datetime.utcnow().isoformat()
+                }
+            logger.info(f"   📚 Updating topic-specific traits for {len(selected_topics)} topics")
+        
         await users_collection.update_one(
             {"_id": current_user.id},
-            {"$set": {"cognitive_traits": trait_adjustments}}
+            update_data
         )
         logger.info(f"✅ Cognitive traits updated successfully")
         
@@ -728,6 +892,7 @@ async def submit_quiz_with_feedback(
             "avg_confidence": avg_confidence,
             "feedback": feedback_results,
             "updated_traits": trait_adjustments,
+            "misconceptions_discovered": misconceptions_discovered,  # NEW: Return discovered misconceptions
             "message": f"Quiz complete! You scored {score_percentage:.1f}%"
         }
         
@@ -738,4 +903,129 @@ async def submit_quiz_with_feedback(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Quiz submission failed: {str(e)}"
+        )
+
+
+@router.post("/sessions/{session_id}/debug-apply-trait-update")
+async def debug_apply_trait_update(
+    session_id: str,
+    payload: QuizSubmission,
+    current_user: UserModel = Depends(get_current_user),
+    users_collection=Depends(_users_collection),
+):
+    """DEBUG ONLY: Apply trait update for the current user using supplied responses.
+
+    This endpoint bypasses the need for generated_questions in the session and
+    directly calls the CognitiveTraitUpdateService with the provided responses.
+    Useful for reproducing and debugging trait-update logic.
+    """
+    logger.info(f"🐛 [DEBUG] apply-trait-update for user {current_user.email} with {len(payload.responses)} responses")
+    try:
+        # Get current traits
+        cognitive_traits = current_user.cognitive_traits
+        if hasattr(cognitive_traits, 'model_dump'):
+            cognitive_traits = cognitive_traits.model_dump()
+        elif hasattr(cognitive_traits, 'dict'):
+            cognitive_traits = cognitive_traits.dict()
+        elif not isinstance(cognitive_traits, dict):
+            cognitive_traits = {}
+
+        # Simplified quiz_data mapping - we don't have full question objects here
+        quiz_data = []
+        mock_questions = []  # Create mock questions for trait inference
+        
+        for resp in payload.responses:
+            qnum = resp.get("question_number")
+            quiz_data.append({
+                "question_number": qnum,
+                "selected_answer": resp.get("selected_answer"),
+                "is_correct": resp.get("is_correct", None),
+                "confidence": resp.get("confidence", 0.5),
+                "reasoning": resp.get("reasoning")
+            })
+            
+            # Create mock question with default trait targeting
+            mock_questions.append({
+                "question_number": qnum,
+                "difficulty": "medium",
+                "requires_calculation": False,  # Can be overridden if needed
+                "misconception_target": None,
+                "traits_targeted": ["precision", "analytical_depth"]  # Default traits
+            })
+
+        logger.info(f"🐛 [DEBUG] Prepared {len(quiz_data)} items for trait analysis")
+
+        trait_service = CognitiveTraitUpdateService()
+        trait_update_result = trait_service.update_traits(
+            current_traits=cognitive_traits,
+            quiz_responses=quiz_data,
+            questions=mock_questions  # Pass mock questions instead of empty list
+        )
+
+        trait_adjustments = trait_update_result.get("updated_traits", cognitive_traits)
+
+        # Persist to users collection
+        await users_collection.update_one(
+            {"_id": current_user.id},
+            {"$set": {"cognitive_traits": trait_adjustments}}
+        )
+
+        logger.info(f"🐛 [DEBUG] Traits persisted for user {current_user.email}")
+
+        return {"updated_traits": trait_adjustments}
+
+    except Exception as e:
+        logger.error(f"🐛 [DEBUG] Trait update debug failed: {e}", exc_info=True)
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
+
+
+@router.delete("/sessions/{session_id}")
+async def delete_session(
+    session_id: str,
+    current_user: UserModel = Depends(get_current_user),
+    sessions_collection=Depends(_sessions_collection),
+):
+    """
+    Delete a specific learning session.
+    Only the owner of the session can delete it.
+    """
+    try:
+        # First verify the session exists and belongs to the user
+        session = await sessions_collection.find_one({
+            "_id": session_id,
+            "user_id": current_user.id
+        })
+        
+        if not session:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Session not found or you don't have permission to delete it"
+            )
+        
+        # Delete the session
+        result = await sessions_collection.delete_one({
+            "_id": session_id,
+            "user_id": current_user.id
+        })
+        
+        if result.deleted_count == 0:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Failed to delete session"
+            )
+        
+        logger.info(f"🗑️ Session {session_id} deleted by user {current_user.email}")
+        
+        return {
+            "message": "Session deleted successfully",
+            "session_id": session_id
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"❌ Failed to delete session {session_id}: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to delete session"
         )

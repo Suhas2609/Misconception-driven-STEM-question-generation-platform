@@ -111,3 +111,12 @@ export async function submitQuizWithFeedback(sessionId, responses) {
   return data;
 }
 
+/**
+ * Delete a learning session
+ * @param {string} sessionId - The session ID to delete
+ * @returns {Promise} Deletion confirmation
+ */
+export async function deleteSession(sessionId) {
+  const { data } = await apiClient.delete(`/pdf-v2/sessions/${sessionId}`);
+  return data;
+}

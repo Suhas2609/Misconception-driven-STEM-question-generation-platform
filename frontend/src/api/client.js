@@ -20,6 +20,25 @@ apiClient.interceptors.request.use(
   }
 );
 
+// Handle 401 errors globally
+apiClient.interceptors.response.use(
+  (response) => response,
+  (error) => {
+    if (error.response?.status === 401) {
+      // Token expired or invalid
+      console.error("❌ Authentication error - token may be expired");
+      // Clear invalid token
+      localStorage.removeItem("access_token");
+      
+      // Only redirect if not already on login page
+      if (!window.location.pathname.includes('/login')) {
+        window.location.href = '/login';
+      }
+    }
+    return Promise.reject(error);
+  }
+);
+
 export function extractErrorMessage(error, fallback = "Unexpected error") {
   if (axios.isAxiosError(error)) {
     return (

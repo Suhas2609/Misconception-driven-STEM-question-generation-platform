@@ -7,6 +7,15 @@ ENV PYTHONPATH=/app/src
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
+# Download NLTK data (punkt tokenizer for PDF text processing)
+RUN python -c "import nltk; nltk.download('punkt'); nltk.download('punkt_tab')"
+
+# Download spaCy language model for advanced NLP analysis
+RUN python -m spacy download en_core_web_sm
+
+# Download TextBlob corpora for sentiment/subjectivity analysis
+RUN python -m textblob.download_corpora
+
 COPY ./src ./src
 
 EXPOSE 8000
